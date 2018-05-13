@@ -1,0 +1,126 @@
+Learn how to integrate oauth security into your apps
+
+2 Main parts in spring security -> Configuration and Filters at runtime.
+
+Configuration determines the filters and order of filters in the runtime.
+
+Authentication -> Different flows
+  1. user requests normal page that doesn't require auth (like /login etc)
+  2. user posts credentials and server needs to validate the credentials. (From DB/Inmem etc)
+  3. Post login, user should be identified for every request
+  For oauth authentication -> 2 more flows
+    1. user should be redirected to oauth authorization server with our server's client-id, scopes
+    2. Once user permits, need to handle the response of server in redirect uri handler.
+    3. Call the authorization server to get the access token and call the resource server with the token
+    4. Store the resource server's user details response
+    
+
+Spring security Configuration:
+  1. Spring security, by default is configured in WebSecurityAdapater
+  2. Need to extend this adapter and override configure methods
+  
+
+OAuth2LoginConfigurer:On overriding httpsecurity configure method, http.oauth2login() returns OAuth2LoginConfigurer which can be used to setup OAuth related configuration.You can provide your custom configuration for below entities
+  1. Custom Auth filters
+  2. AuthenticationDetails Source
+  3. AuthenticationSuccessHandler
+  4. LoginUrlAuthenticationEntryPoint
+  5. AuthenticationFailureHandler
+  6. Loginpage
+  7. loginprocessingurl
+  8. AuthorizationEndPointConfig - 
+      1. baseUri
+      2. authorizationRequestRepository - 
+  9. TokenEndPointConfig -
+      1. OAuth2AccessTokenResponseClient<OAuth2AuthorizationCodeGrantRequest> accessTokenResponseClient - 
+      2. 
+  10. RedirectionEndPointConfig
+      1. baseUri
+  11. UserInfoEndPointConfig
+      1. OAuth2UserService<OAuth2UserRequest, OAuth2User> userService -> Imp: This service is used for obtaining user attributes of end-user from userinfo endpoint.
+      2. oidcUserService(OAuth2UserService<OidcUserRequest, OidcUser> oidcUserService) 
+      3. customUserType(Class<? extends OAuth2User> customUserType, String clientRegistrationId)
+      4. userAuthoritiesMapper(GrantedAuthoritiesMapper userAuthoritiesMapper) 
+      5. 
+      
+      
+
+Apart from the above, you can configure default httpsecurity as well. Here are the entities
+  1. openIdLogin
+  2. headers()
+  3. cors()
+  4. sessionManagement()
+  5. rememberMe()
+  6. requestCache() -> Auto re-direct to previous page requested before login
+  7. crsf()
+  8. formLogin()
+  9. oauth2login()
+  10. authenticationProvider(provider)
+  11. userDetailsService(service)
+  12. requestmatches, antmatchers -> Imp
+
+
+
+
+
+Main Classes:
+
+UserInfoEndPoint flow:
+  1. OAuth2UserRequest -> Represents the request that OAuth2Service uses when initiating request to UserInfo endpoint.
+    1. ClientRegistration, OAuth2AccessToken
+    2. Methods returning clientRegistration, accessToken
+    3. Subclasses -> OidcuserRequest - extra oidcIdToken (represents request for OidcService)
+  2. OAuth2AccessToken -> AccessToken is a credential that represents an authorization granted by resource owner to the client. Primarily used by client to access protected resources on oauth server.
+      1. tokenValue(String), expiresAt, issuedAt, TokenType(Generally "Bearer), Set<String> scopes
+      2. 
+  3. OAuth2AccessTokenResponse -> Representation of Oauth 2.0 access token response 
+      1. Oauth2AcessToken, additionalParamMap (Contains additional params returned in response)
+  4. OAuth2UserService -> Responsible for obtaining user attributes of resource owner from userinfo endpoint.
+      1. OAuth2User loadUser(OAuth2UserRequest)
+      2. Subclasses ->
+          1. DefaultOAuth2UserService -> NimbusUserInfoResponseClient to loadUser and Map<String,Object> as conversion type. In order to change role, need to extend this class
+          2. OidcUserService -> For OpenID providers. NimbusUserInfoResponseClient to loadUser. userInfoScopes 
+          3. DelegatingOAuth2UserService -> Contains list of OAuth2UserServices. Loads first non-null user.
+          4. CustomUserTypesOAuth2UserService -> NimbusUserInfoResponseClient to loadUser. customUserTypes Map which contains a OAuth2User instance mapper to particular registrationId. So, response can be converted into server specific object.
+  5. <I>OAuth2User extends AuthenticatedPrincipal-> Representation of authenticated user(Principal) that is registered with provider once the request is successfully authenticated. Composed of many attributes returned by provider. 
+      1. Collection<GrantedAuthority> getAuthorities() and Map<String,Object> getAttributes(), getName();
+      2. Subclasses-> 
+          1. DefaultOAuth2User -> 
+
+Authorization Code Grant flow:
+  1. AuthorizationGrantType -> Authorization_Code, Implicit (Indicates the grant type to be used for obtaining access token)
+  2. OAuth2AuthorizationExchange -> Contains OAuth2AuthorizationRequest and OAuth2AuthorizationResponse for auth_code grant type.
+      1. OAuth2AuthorizationRequest -> Representation of Oauth 2.0 request for authorization code grant type.(authUri, responseType, clientId, redirecturi, scopes, state, additionalParams)
+      2. OAuth2AuthorizationResponse -> redirecturii, code, state, OAuth2Error
+  3. OAuth2AuthorizationCodeGrantRequest -> Holds authorization_code credential granted to client by resource server. 
+      1. ClientRegistration, OAuth2AuthorizationExchange
+      2. Use this to get OAuth2AccessTokenResponse.
+      
+ 
+ 
+ OAuth2LoginAuthenticationFilter:
+  1. Attempts authentication if url is /oauth2/code/* i.e when server calls redirect uri.
+  2. OAuth2AuthorizationRequest is retrieved from session(authorization repository) that is stored when redirection to outh sever is done.
+  3. From request, retrieve code, state, redirecturi -> OAuth2AuthorizationResponse
+  4. From now on, basic spring security flow starts.
+  5. Delegation to AuthenticationManger, Authentication Token(Authenticated vs Unauthenticated)
+  6. OAuth2LoginAuthenticationToken is created -> OAuth2User, clientRegistration, authorizationExchange, authorities, details, OAuth2AccessToken, authenticated= true/false
+  7. AuthenticationManager -> Reutrns fully populated Authentication object if successful. Authentication authenticate(Authentication)
+  8. AuthenticationProvider -> Authentication Manager delegates call to the provider. Authentication authenticate(Authentication) and boolean supports(Authentication class)
+  9. ProviderManager -> Iterates authentication request through list of Authenticationproviders. Based on Authentication object's class, the appropriate provider(s) is selected.
+  10. OAuth2LoginAuthenticationProvider -> Oauth2's provider. Leverages oauth2 code grant flow. Responsible for authenticating authorized code with Auth server's token endpoint and if valid, exchanges it for access token credential.
+    1. It will also  obtain user attributes of End-user from UserInfo endpoint using OAuth2UserService which will create principal in form OAuth2User
+    2. OAuth2User is associated to OAuth2LoginAuthentication to complete authentication
+    3. OAuth2AccessTokenResponseClient -> Strategy for exchanging auth code for access token credential of auth server's end point.
+      1. getTokenResponse(T AuthorizationGrantRequest) -> 
+      2. Call to Resource Server -> Returns AccessTokenResponse(Containing access_token and refresh_token)
+      3. From AccessTokenResponse -> Build OAuth2AccessTokenResponse (contains access_token, scopes etc)
+    4. Using userSerivce.loadUser(OAuth2UserRequest)
+      1. NimbusUserInfoResponseClient -> for converting response of userendpoint. From oauth2UserRequest-> Get accesstoken, clientRegistration
+      2. UserEndpointResponse -> 
+      3. Use customTypesUserService if you want to wrap response into custom_entity
+      4. Create OAuth2User with authorites, Add corresponding authorities here after response is returned (For recruiter, add recruiter role here using registration id)
+      
+      
+    
+  
